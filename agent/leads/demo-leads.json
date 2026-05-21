@@ -1,0 +1,15 @@
+[
+  {
+    "room_name": "voice_assistant_room_990",
+    "created_at": "2026-05-20T11:40:24.918804+00:00",
+    "fields": {
+      "name": "Laksha",
+      "company": "Caterpillar",
+      "problem": "Unplanned equipment downtime, difficulty predicting failures, manual reporting, and fragmented operational data",
+      "role": "Identifies operational inefficiencies and designs AI-driven solutions to reduce manual effort",
+      "technical_capacity": "Works closely with internal engineering and IT teams for implementation and system access"
+    },
+    "summary": "",
+    "updated_at": "2026-05-20T11:44:20.629431+00:00"
+  }
+]
