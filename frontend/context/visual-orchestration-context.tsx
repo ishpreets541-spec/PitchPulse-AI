@@ -7,6 +7,8 @@ import {
   useVisualOrchestration,
 } from '@/hooks/useVisualOrchestration';
 
+export type { VisualMode };
+
 interface VisualOrchestrationContextValue {
   state: VisualState;
   setMode: (mode: VisualMode) => void;

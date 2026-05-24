@@ -1,6 +1,8 @@
 import json
 import logging
 import textwrap
+import asyncio
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,6 +29,17 @@ load_dotenv(".env.local")
 
 LEADS_FILE = Path(__file__).resolve().parents[1] / "leads" / "demo-leads.json"
 VISUAL_TOPIC = "maneuver.visual"
+DEFAULT_TTS_MODEL = "cartesia/sonic-3"
+DEFAULT_TTS_VOICE = "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
+VISUAL_RPC_METHOD = "maneuver.visual.update"
+VISUAL_RPC_METHODS = {
+    "state_sync": "state_sync",
+    "lead_field_updated": "update_lead_field",
+    "lead_summary_saved": "save_lead_summary",
+    "show_services": "show_services_slide",
+    "show_service_detail": "show_service_detail",
+    "show_process": "show_process_diagram",
+}
 LEAD_FIELDS = {
     "name",
     "role",
@@ -299,11 +312,23 @@ class Assistant(Agent):
         )
 
     async def on_enter(self) -> None:
-        self.sync_visual_state()
+        asyncio.create_task(self._sync_visual_state_when_ready())
 
-    def sync_visual_state(self) -> None:
+    async def _sync_visual_state_when_ready(self) -> None:
+        for _ in range(20):
+            try:
+                await self.sync_visual_state()
+                return
+            except Exception as error:
+                logger.debug(
+                    "visual state sync delayed",
+                    extra={"room": self.room_name, "error": str(error)},
+                )
+                await asyncio.sleep(0.25)
+
+    async def sync_visual_state(self) -> None:
         """Push current UI state to any client already in the room."""
-        self._emit_visual_event(
+        await self._emit_visual_event(
             "state_sync",
             self.visual_state["mode"],
             {
@@ -313,7 +338,7 @@ class Assistant(Agent):
             },
         )
 
-    def _emit_visual_event(self, event_type: str, mode: str, payload: dict) -> None:
+    async def _emit_visual_event(self, event_type: str, mode: str, payload: dict) -> None:
         self.visual_state.update(
             {
                 "mode": mode,
@@ -325,14 +350,37 @@ class Assistant(Agent):
             "source": "maneuver-agent",
             "type": event_type,
             "mode": mode,
+            "rpc_method": VISUAL_RPC_METHODS.get(event_type, VISUAL_RPC_METHOD),
             "payload": payload,
             "state": self.visual_state,
         }
-        self.room.local_participant.publish_data(
-            json.dumps(message, ensure_ascii=False),
+        encoded_message = json.dumps(message, ensure_ascii=False)
+        await self.room.local_participant.publish_data(
+            encoded_message,
             reliable=True,
             topic=VISUAL_TOPIC,
         )
+
+        remote_participants = list(self.room.remote_participants.values())
+        for participant in remote_participants:
+            for method in {VISUAL_RPC_METHOD, message["rpc_method"]}:
+                try:
+                    await self.room.local_participant.perform_rpc(
+                        destination_identity=participant.identity,
+                        method=method,
+                        payload=encoded_message,
+                        response_timeout=1.5,
+                    )
+                except Exception as error:
+                    logger.debug(
+                        "visual rpc delivery failed",
+                        extra={
+                            "room": self.room_name,
+                            "participant": participant.identity,
+                            "method": method,
+                            "error": str(error),
+                        },
+                    )
 
     @function_tool
     async def update_lead_field(self, context: RunContext, field: str, value: str) -> str:
@@ -358,7 +406,7 @@ class Assistant(Agent):
             {"fields": {normalized_field: value.strip()}},
         )
         self.visual_state["lead"] = lead["fields"]
-        self._emit_visual_event(
+        await self._emit_visual_event(
             "lead_field_updated",
             "lead_capture",
             {"field": normalized_field, "value": value.strip(), "lead": lead["fields"]},
@@ -384,7 +432,7 @@ class Assistant(Agent):
 
         lead = _upsert_lead(self.room_name, {"summary": summary.strip()})
         self.visual_state["lead"] = lead["fields"]
-        self._emit_visual_event(
+        await self._emit_visual_event(
             "lead_summary_saved",
             "lead_capture",
             {"summary": summary.strip(), "lead": lead["fields"]},
@@ -402,7 +450,7 @@ class Assistant(Agent):
         """
 
         self.visual_state["selected_service"] = None
-        self._emit_visual_event("show_services", "services", {"services": SERVICES})
+        await self._emit_visual_event("show_services", "services", {"services": SERVICES})
         return "Services view shown."
 
     @function_tool
@@ -417,7 +465,7 @@ class Assistant(Agent):
 
         service = _resolve_service(service_name)
         self.visual_state["selected_service"] = service["id"]
-        self._emit_visual_event(
+        await self._emit_visual_event(
             "show_service_detail",
             "services",
             {"service": service, "services": SERVICES},
@@ -433,7 +481,7 @@ class Assistant(Agent):
         """
 
         self.visual_state["selected_service"] = None
-        self._emit_visual_event(
+        await self._emit_visual_event(
             "show_process",
             "process",
             {"steps": PROCESS_STEPS},
@@ -459,6 +507,9 @@ async def my_agent(ctx: JobContext):
         "room": ctx.room.name,
     }
 
+    tts_model = os.getenv("TTS_MODEL", DEFAULT_TTS_MODEL)
+    tts_voice = os.getenv("TTS_VOICE_ID", DEFAULT_TTS_VOICE)
+
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
@@ -466,9 +517,7 @@ async def my_agent(ctx: JobContext):
         stt=inference.STT(model="deepgram/nova-3", language="multi"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts=inference.TTS(
-            model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
-        ),
+        tts=inference.TTS(model=tts_model, voice=tts_voice),
         # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
         # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),

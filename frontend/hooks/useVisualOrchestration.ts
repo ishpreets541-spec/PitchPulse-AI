@@ -1,10 +1,21 @@
 'use client';
 
-import { useCallback, useMemo, useReducer } from 'react';
-import { useDataChannel } from '@livekit/components-react';
+import { useCallback, useEffect, useMemo, useReducer } from 'react';
+import { useDataChannel, useRoomContext } from '@livekit/components-react';
 import { MANEUVER_SERVICES, type ManeuverService, PROCESS_STEPS } from '@/lib/maneuver-catalog';
 
 export const VISUAL_TOPIC = 'maneuver.visual';
+export const VISUAL_RPC_METHOD = 'maneuver.visual.update';
+
+const VISUAL_RPC_METHODS = [
+  VISUAL_RPC_METHOD,
+  'state_sync',
+  'show_services_slide',
+  'show_service_detail',
+  'show_process_diagram',
+  'update_lead_field',
+  'save_lead_summary',
+] as const;
 
 export type VisualMode = 'services' | 'process' | 'lead_capture';
 
@@ -73,6 +84,16 @@ function decodePayload(payload: Uint8Array) {
   return new TextDecoder().decode(payload);
 }
 
+function parseVisualEvent(payload: string) {
+  const event = JSON.parse(payload) as VisualEvent;
+
+  if (event.source !== 'maneuver-agent') {
+    return null;
+  }
+
+  return event;
+}
+
 function visualReducer(state: VisualState, event: VisualEvent): VisualState {
   const payload = event.payload ?? {};
   const nextMode = event.mode ?? event.state?.mode ?? state.mode;
@@ -108,13 +129,14 @@ function visualReducer(state: VisualState, event: VisualEvent): VisualState {
 }
 
 export function useVisualOrchestration() {
+  const room = useRoomContext();
   const [state, dispatch] = useReducer(visualReducer, INITIAL_STATE);
 
   const handleMessage = useCallback((message: { payload: Uint8Array }) => {
     try {
-      const event = JSON.parse(decodePayload(message.payload)) as VisualEvent;
+      const event = parseVisualEvent(decodePayload(message.payload));
 
-      if (event.source !== 'maneuver-agent') {
+      if (!event) {
         return;
       }
 
@@ -125,6 +147,33 @@ export function useVisualOrchestration() {
   }, []);
 
   useDataChannel(VISUAL_TOPIC, handleMessage);
+
+  useEffect(() => {
+    if (!room) {
+      return;
+    }
+
+    const handleRpcEvent = async ({ payload }: { payload: string }) => {
+      const event = parseVisualEvent(payload);
+
+      if (!event) {
+        return JSON.stringify({ ok: false, ignored: true });
+      }
+
+      dispatch(event);
+      return JSON.stringify({ ok: true, applied: event.type });
+    };
+
+    for (const method of VISUAL_RPC_METHODS) {
+      room.localParticipant.registerRpcMethod(method, handleRpcEvent);
+    }
+
+    return () => {
+      for (const method of VISUAL_RPC_METHODS) {
+        room.localParticipant.unregisterRpcMethod(method);
+      }
+    };
+  }, [room]);
 
   return useMemo(
     () => ({
