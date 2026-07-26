@@ -1,4 +1,4 @@
-# AI Voice Agent - Talk to Founder
+# AI Voice Agent - Talk to Founder:
 
 LiveKit voice agent + Next.js frontend with real-time visual orchestration.
 
