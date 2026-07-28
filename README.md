@@ -1,4 +1,4 @@
-# AI Voice Agent - Talk to Founder:
+# PitchPulse-AI Voice Agent - Talk to Founder:
 
 LiveKit voice agent + Next.js frontend with real-time visual orchestration.
 
@@ -99,4 +99,15 @@ uv run python src/agent.py dev
 ```
 
 Note: voice IDs are provider-specific. Pick a male voice ID from your TTS provider dashboard/docs and paste it into `TTS_VOICE_ID`.
+
+# 👩‍💻 Author
+
+**Ishpreet Singh**
+
+M.Tech
+Indian Institute of Technology Bombay
+Mail ID:
+25m0326@iitb.ac.in
+
+
 
